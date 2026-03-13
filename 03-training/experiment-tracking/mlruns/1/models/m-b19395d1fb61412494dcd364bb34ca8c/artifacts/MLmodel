@@ -1,0 +1,22 @@
+artifact_path: /workspaces/mlops-labs/03-training/experiment-tracking/mlruns/1/models/m-b19395d1fb61412494dcd364bb34ca8c/artifacts
+flavors:
+  python_function:
+    data: model.xgb
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.9.25
+  xgboost:
+    code: null
+    data: model.xgb
+    model_class: xgboost.core.Booster
+    model_format: xgb
+    xgb_version: 2.1.4
+mlflow_version: 3.1.4
+model_id: m-b19395d1fb61412494dcd364bb34ca8c
+model_size_bytes: 8287356
+model_uuid: m-b19395d1fb61412494dcd364bb34ca8c
+prompts: null
+run_id: 4540ba75af8c4c2db659a0b3a8da083b
+utc_time_created: '2026-03-13 18:04:27.575801'
