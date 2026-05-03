@@ -12,6 +12,8 @@ HPO_EXPERIMENT_NAME = "random-forest-hyperopt"
 EXPERIMENT_NAME = "random-forest-best-models"
 RF_PARAMS = ['max_depth', 'n_estimators', 'min_samples_split', 'min_samples_leaf', 'random_state']
 
+BEST_EXPERIMENT_NAME = "random-forest-best-models"
+
 mlflow.set_tracking_uri("http://127.0.0.1:5000")
 mlflow.set_experiment(EXPERIMENT_NAME)
 mlflow.sklearn.autolog()
@@ -32,7 +34,7 @@ def train_and_log_model(data_path, params):
         for param in RF_PARAMS:
             new_params[param] = int(params[param])
 
-        rf = RandomForestRegressor(**new_params)
+        rf = RandomForestRegressor(**new_params, n_jobs=1)
         rf.fit(X_train, y_train)
 
         # Evaluate model on the validation and test sets
@@ -45,12 +47,12 @@ def train_and_log_model(data_path, params):
 @click.command()
 @click.option(
     "--data_path",
-    default="./output",
+    default="./02-experiment-tracking/output",
     help="Location where the processed NYC taxi trip data was saved"
 )
 @click.option(
     "--top_n",
-    default=5,
+    default=1,
     type=int,
     help="Number of top models that need to be evaluated to decide which one to promote"
 )
@@ -59,22 +61,34 @@ def run_register_model(data_path: str, top_n: int):
     client = MlflowClient()
 
     # Retrieve the top_n model runs and log the models
-    experiment = client.get_experiment_by_name(HPO_EXPERIMENT_NAME)
-    runs = client.search_runs(
+    # experiment = client.get_experiment_by_name(HPO_EXPERIMENT_NAME)
+    experiment = client.get_experiment_by_name(BEST_EXPERIMENT_NAME)
+
+    # runs = client.search_runs(
+    #     experiment_ids=experiment.experiment_id,
+    #     run_view_type=ViewType.ACTIVE_ONLY,
+    #     max_results=top_n,
+    #     order_by=["metrics.rmse ASC"]
+    # )
+    best_run = client.search_runs(
         experiment_ids=experiment.experiment_id,
         run_view_type=ViewType.ACTIVE_ONLY,
-        max_results=top_n,
-        order_by=["metrics.rmse ASC"]
+        max_results=1,
+        order_by=["metrics.test_rmse ASC"]
     )
-    for run in runs:
-        train_and_log_model(data_path=data_path, params=run.data.params)
+    # for run in runs:
+    #     train_and_log_model(data_path=data_path, params=run.data.params)
 
     # Select the model with the lowest test RMSE
-    experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
+    # experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
     # best_run = client.search_runs( ...  )[0]
-
+    best_model_name = best_run[0].info.run_name
+    best_model_uri= best_run[0].info.run_id
     # Register the best model
-    # mlflow.register_model( ... )
+    mlflow.register_model(
+    model_uri=f"runs:/{best_model_uri}/model",
+    name=best_model_name,
+    )
 
 
 if __name__ == '__main__':
