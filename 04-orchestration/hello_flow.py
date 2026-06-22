@@ -2,7 +2,7 @@ from prefect import flow, task
 
 @task
 def say_hello():
-    print("Hola Antonio, Prefect está funcionando!")
+    print("Hola Antonio, airlfow está funcionando!")
 
 @flow
 def hello_flow():
