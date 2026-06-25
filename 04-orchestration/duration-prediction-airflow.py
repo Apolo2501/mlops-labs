@@ -7,18 +7,16 @@ import xgboost as xgb
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics import root_mean_squared_error
 import mlflow
-
-mlflow.set_tracking_uri("http://host.docker.internal:5000")
-mlflow.set_experiment("nyc-taxi-experiment")
+import os
 
 
 # -------------------------
-# FUNCIONES ORIGINALES ADAPTADAS A AIRFLOW
+# FUNCIONES
 # -------------------------
 
 def read_dataframe(year, month):
     url = f'https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_{year}-{month:02d}.parquet'
-    df = pd.read_parquet(url)
+    df = pd.read_parquet(url, engine="pyarrow")
 
     df['duration'] = df.lpep_dropoff_datetime - df.lpep_pickup_datetime
     df.duration = df.duration.apply(lambda td: td.total_seconds() / 60)
@@ -49,6 +47,11 @@ def create_X(df_dict, dv_dict=None):
 
 
 def train_model(X_train_dict, y_train, X_val_dict, y_val, dv_dict):
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment("nyc-taxi-experiment")
+
+    os.makedirs(os.path.expanduser("~/airflow/models"), exist_ok=True)
+
     X_train = X_train_dict
     X_val = X_val_dict
     dv = pickle.loads(dv_dict)
@@ -81,10 +84,12 @@ def train_model(X_train_dict, y_train, X_val_dict, y_val, dv_dict):
         rmse = root_mean_squared_error(y_val, y_pred)
         mlflow.log_metric("rmse", rmse)
 
-        with open("/opt/airflow/models/preprocessor.b", "wb") as f_out:
-            pickle.dump(dv, f_out)
-        mlflow.log_artifact("/opt/airflow/models/preprocessor.b", artifact_path="preprocessor")
+        os.makedirs(os.path.expanduser("~/airflow/models"), exist_ok=True)
 
+        with open(os.path.expanduser("~/airflow/models/preprocessor.b"), "wb") as f_out:
+            pickle.dump(dv, f_out)
+
+        mlflow.log_artifact(os.path.expanduser("~/airflow/models/preprocessor.b"), artifact_path="preprocessor")
         mlflow.xgboost.log_model(booster, artifact_path="models_mlflow")
 
         return run.info.run_id
@@ -103,37 +108,65 @@ with DAG(
 
     def load_train_data(**context):
         df = read_dataframe(2021, 1)
-        context["ti"].xcom_push(key="df_train", value=df)
+        path = "/tmp/df_train.parquet"
+        pd.DataFrame(df).to_parquet(path)
+        context["ti"].xcom_push(key="df_train_path", value=path)
 
     def load_val_data(**context):
         df = read_dataframe(2021, 2)
-        context["ti"].xcom_push(key="df_val", value=df)
+        path = "/tmp/df_val.parquet"
+        pd.DataFrame(df).to_parquet(path)
+        context["ti"].xcom_push(key="df_val_path", value=path)
 
     def create_train_features(**context):
-        df_train = context["ti"].xcom_pull(key="df_train")
-        X_train, dv = create_X(df_train)
-        y_train = pd.DataFrame(df_train)["duration"].values
+        path = context["ti"].xcom_pull(key="df_train_path")
+        df_train = pd.read_parquet(path)
+        X_train, dv = create_X(df_train.to_dict())
+        y_train = df_train["duration"].values
 
-        context["ti"].xcom_push(key="X_train", value=X_train)
-        context["ti"].xcom_push(key="y_train", value=y_train)
-        context["ti"].xcom_push(key="dv", value=dv)
+        context["ti"].xcom_push(key="X_train_path", value="/tmp/X_train.pkl")
+        context["ti"].xcom_push(key="y_train_path", value="/tmp/y_train.pkl")
+        context["ti"].xcom_push(key="dv_path", value="/tmp/dv.pkl")
+
+        pickle.dump(X_train, open("/tmp/X_train.pkl", "wb"))
+        pickle.dump(y_train, open("/tmp/y_train.pkl", "wb"))
+        pickle.dump(dv, open("/tmp/dv.pkl", "wb"))
 
     def create_val_features(**context):
-        df_val = context["ti"].xcom_pull(key="df_val")
-        dv = context["ti"].xcom_pull(key="dv")
+        # 1. Recuperamos la ruta del parquet de validación
+        df_val_path = context["ti"].xcom_pull(key="df_val_path")
 
-        X_val, _ = create_X(df_val, dv)
-        y_val = pd.DataFrame(df_val)["duration"].values
+        # 2. Leemos el dataframe desde disco
+        df_val = pd.read_parquet(df_val_path)
 
-        context["ti"].xcom_push(key="X_val", value=X_val)
-        context["ti"].xcom_push(key="y_val", value=y_val)
+        # 3. Recuperamos el preprocessor (DictVectorizer) desde disco
+        dv_path = context["ti"].xcom_pull(key="dv_path")
+        dv = pickle.load(open(dv_path, "rb"))
+
+        # 4. Creamos las features
+        X_val, _ = create_X(df_val.to_dict(), dv)
+
+        # 5. Extraemos y guardamos y_val
+        y_val = df_val["duration"].values
+
+        # 6. Guardamos X_val y y_val en disco
+        X_val_path = "/tmp/X_val.pkl"
+        y_val_path = "/tmp/y_val.pkl"
+
+        pickle.dump(X_val, open(X_val_path, "wb"))
+        pickle.dump(y_val, open(y_val_path, "wb"))
+
+        # 7. Pasamos SOLO las rutas por XCom
+        context["ti"].xcom_push(key="X_val_path", value=X_val_path)
+        context["ti"].xcom_push(key="y_val_path", value=y_val_path)
+
 
     def train(**context):
-        X_train = context["ti"].xcom_pull(key="X_train")
-        y_train = context["ti"].xcom_pull(key="y_train")
-        X_val = context["ti"].xcom_pull(key="X_val")
-        y_val = context["ti"].xcom_pull(key="y_val")
-        dv = context["ti"].xcom_pull(key="dv")
+        X_train = pickle.load(open(context["ti"].xcom_pull(key="X_train_path"), "rb"))
+        y_train = pickle.load(open(context["ti"].xcom_pull(key="y_train_path"), "rb"))
+        X_val = pickle.load(open(context["ti"].xcom_pull(key="X_val_path"), "rb"))
+        y_val = pickle.load(open(context["ti"].xcom_pull(key="y_val_path"), "rb"))
+        dv = pickle.load(open(context["ti"].xcom_pull(key="dv_path"), "rb"))
 
         run_id = train_model(X_train, y_train, X_val, y_val, dv)
         print("MLflow run:", run_id)

@@ -7,13 +7,11 @@ import xgboost as xgb
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics import root_mean_squared_error
 import mlflow
-
-mlflow.set_tracking_uri("http://host.docker.internal:5000")
-mlflow.set_experiment("nyc-taxi-experiment")
+import os
 
 
 # -------------------------
-# FUNCIONES ORIGINALES ADAPTADAS A AIRFLOW
+# FUNCIONES
 # -------------------------
 
 def read_dataframe(year, month):
@@ -49,6 +47,11 @@ def create_X(df_dict, dv_dict=None):
 
 
 def train_model(X_train_dict, y_train, X_val_dict, y_val, dv_dict):
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment("nyc-taxi-experiment")
+
+    os.makedirs(os.path.expanduser("~/airflow/models"), exist_ok=True)
+
     X_train = X_train_dict
     X_val = X_val_dict
     dv = pickle.loads(dv_dict)
@@ -81,10 +84,12 @@ def train_model(X_train_dict, y_train, X_val_dict, y_val, dv_dict):
         rmse = root_mean_squared_error(y_val, y_pred)
         mlflow.log_metric("rmse", rmse)
 
-        with open("/opt/airflow/models/preprocessor.b", "wb") as f_out:
-            pickle.dump(dv, f_out)
-        mlflow.log_artifact("/opt/airflow/models/preprocessor.b", artifact_path="preprocessor")
+        os.makedirs(os.path.expanduser("~/airflow/models"), exist_ok=True)
 
+        with open(os.path.expanduser("~/airflow/models/preprocessor.b"), "wb") as f_out:
+            pickle.dump(dv, f_out)
+
+        mlflow.log_artifact(os.path.expanduser("~/airflow/models/preprocessor.b"), artifact_path="preprocessor")
         mlflow.xgboost.log_model(booster, artifact_path="models_mlflow")
 
         return run.info.run_id
